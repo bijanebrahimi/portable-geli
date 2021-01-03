@@ -382,6 +382,20 @@ eli_algo2str(uint16_t algo)
 	return ("unknown");
 }
 
+static __inline int
+eli_ealgo_supprted(int ealgo)
+{
+	switch (ealgo) {
+	case CRYPTO_AES_XTS:
+#if 0
+	case CRYPTO_AES_CBC:
+#endif /* AES-CBC Support */
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 static __inline void
 eli_metadata_dump(const struct eli_metadata *md)
 {
@@ -427,6 +441,19 @@ static __inline u_int
 eli_keylen(u_int algo, u_int keylen)
 {
 	switch (algo) {
+#if 0
+	case CRYPTO_AES_CBC:
+		switch (keylen) {
+		case 0:
+			return 128;
+		case 128:
+		case 192:
+		case 256:
+			return keylen;
+		default:
+			return 0;
+		}
+#endif /* AES-CBC Support */
 	case CRYPTO_AES_XTS:
 		switch (keylen) {
 		case 0:

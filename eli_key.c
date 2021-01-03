@@ -181,9 +181,11 @@ eli_mkey_propagate(struct eli_softc *sc, u_char *mkey)
 	switch (sc->sc_ealgo) {
 	case CRYPTO_AES_XTS:
 		break;
+#if 0
 	default:
 		SHA256_Init(&sc->sc_ivctx);
-		SHA256_Update(&sc->sc_ivctx, sc->sc_ivkey, sizeof(sc->sc_ivkey));
+		SHA256_Update(&sc->sc_ivctx, sc->sc_ivkey, sizeof sc->sc_ivkey);
 		break;
+#endif /* AES-CBC Support */
 	}
 }

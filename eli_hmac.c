@@ -98,5 +98,19 @@ eli_crypto_ivgen(struct eli_softc *sc, off_t offset, u_char *iv,
 		bcopy(off, iv, sizeof off);
 		bzero(iv + sizeof off, size - sizeof off);
 		break;
+#if 0
+	default:
+	{
+		u_char hash[SHA256_DIGEST_LENGTH];
+		SHA256_CTX ctx;
+
+		/* Copy precalculated SHA256 context for IV-Key. */
+		bcopy(&sc->sc_ivctx, &ctx, sizeof ctx);
+		SHA256_Update(&ctx, off, sizeof off);
+		SHA256_Final(hash, &ctx);
+		bcopy(hash, iv, size < sizeof hash ? size : sizeof hash);
+		break;
+	}
+#endif /* AES-CBC Support */
 	}
 }

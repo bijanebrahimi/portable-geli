@@ -123,14 +123,6 @@ eli_destroy(struct eli_softc **sc)
 	return;
 }
 
-#if 0
-static int
-eli_destroy_nbd(struct eli_softc *sc)
-{
-	return (g_eli_destroy(sc, 0));
-}
-#endif
-
 static void
 eli_crypto_run(struct eli_softc *sc, int device_fd, struct nbd_request *req, u_char *buf)
 {
@@ -168,6 +160,21 @@ eli_crypto_run(struct eli_softc *sc, int device_fd, struct nbd_request *req, u_c
 				break;
 			}
 			break;
+#if 0
+		case CRYPTO_AES_CBC:
+			switch (sc->sc_ekeylen) {
+			case 128:
+				type = EVP_aes_128_cbc();
+				break;
+			case 192:
+				type = EVP_aes_192_cbc();
+				break;
+			case 256:
+				type = EVP_aes_256_cbc();
+				break;
+			}
+			break;
+#endif /* AES-CBC Support */
 		}
 
 		int out_len, final_out_len;
@@ -365,7 +372,7 @@ eli_nbd_create(struct eli_softc *sc, int device_fd, int nbd_fd, int background)
 	struct nbd_request request;
 	struct nbd_reply reply = {.magic = htonl(NBD_REPLY_MAGIC)};
         while (1) {
-		u_char *buf;
+		u_char *buf = NULL;
 
 		if (read_data(pair[1], (u_char*) &request, sizeof(request)) < 0) {
 			ERR_SYSCALL("Cannot read request");
@@ -561,6 +568,9 @@ eli_init(int argc, char **argv)
 	}
 
 	if ((ealgo = g_eli_str2ealgo(ealgo_str)) < CRYPTO_ALGORITHM_MIN) {
+		ERR_FAILURE("Cannot access device", "Invalid encryption algorithm");
+		goto out;
+	} else if (eli_ealgo_supprted(ealgo)) {
 		ERR_FAILURE("Cannot access device", "Unsupported encryption algorithm");
 		goto out;
 	}
@@ -713,7 +723,7 @@ eli_attach(int argc, char **argv)
 	} else if (md.md_iterations == -1) {
 		ERR_FAILURE("Cannot validate metadata", "Unsupported keyfile encryption");
 		goto out;
-	} else if (md.md_ealgo != CRYPTO_AES_XTS) {
+	} else if (!eli_ealgo_supprted(md.md_ealgo)) {
 		ERR_FAILURE("Cannot validate metadata", "Unsupported encryption algorithm");
 		goto out;
 	}
