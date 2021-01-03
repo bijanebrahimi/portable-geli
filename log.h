@@ -9,23 +9,25 @@ int daemonized;
 const char *ident = "geli";
 
 
-void
-syslog_init()
+static __inline void
+log_init()
 {
 	if (daemonized)
 		openlog(ident, LOG_PID, LOG_DAEMON);
 }
 
-void
+static __inline void
 log_prio(int prio, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	if (daemonized)
+	if (daemonized) {
 		vsyslog(prio, fmt, ap);
-	else
+	} else {
 		vfprintf(stderr, fmt, ap);
+		fprintf(stderr, "\n");
+	}
 
 	va_end(ap);
 }

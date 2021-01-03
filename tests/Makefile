@@ -5,10 +5,10 @@
 
 TESTS	:= $(wildcard *.md)
 LOOPBACK:= /dev/loop1
-NBD	:= /dev/nbd6
+NBD	:= /dev/nbd21
 MOUNTDIR:= mnt
 
-all: $(TESTS)
+all: aes-xts-128-0.md
 	../geli version | fgrep 'userland: 7'
 
 aes-xts-128-0.md:
@@ -42,15 +42,15 @@ aes-xts-128-0.md:
 	../geli setkey -i 0 -j key -J key $(LOOPBACK)
 	md5sum -c $@.md5
 	# Attach
-	mkdir -p $(MOUNTDIR)
-	../geli attach -d -j key $(LOOPBACK) $(NBD)
-	mount -o ro $(NBD)p1 $(MOUNTDIR)
-	cd $(MOUNTDIR) && md5sum -c md5
-	umount $(MOUNTDIR)
+	#mkdir -p $(MOUNTDIR)
+	#../geli attach -d -j key $(LOOPBACK) $(NBD)
+	#mount -o ro $(NBD)p1 $(MOUNTDIR)
+	#cd $(MOUNTDIR) && md5sum -c md5
+	#umount $(MOUNTDIR)
 	# Teardown
-	pkill -TERM -f "glei attach -d -j key $(LOOPBACK) $(NBD)" || true
 	rm $@.backup
 	losetup -d $(LOOPBACK)
+	#pkill -TERM -f "glei attach -d -j key $(LOOPBACK) $(NBD)" || true
 
 aes-xts-128-100.md:
 	md5sum -c $@.md5

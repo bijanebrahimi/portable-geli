@@ -138,9 +138,6 @@
 #define IVSIZE 			16
 
 struct eli_softc {
-	int		 sc_ifd;		/* Encrypted file desc */
-	int		 sc_nbd;		/* NBD provider file desc */
-	int		 sc_pair[2];		/* NBD Socket pair */
 	u_int		 sc_version;
 	u_int		 sc_crypto;
 	uint8_t		 sc_mkey[ELI_DATAIVKEYLEN];
@@ -288,15 +285,17 @@ eli_metadata_decode_v1v2v3v4v5v6v7(u_char *data, struct eli_metadata *md)
 	MD5_Update(&ctx, data, p - data);
 	MD5_Final(hash, &ctx);
 	bcopy(hash, md->md_hash, sizeof(md->md_hash));
+
 	if (bcmp(md->md_hash, p, sizeof(md->md_hash)) != 0)
 		return EINVAL;
+
 	return 0;
 }
 
 static __inline int
 eli_metadata_decode(u_char *data, struct eli_metadata *md)
 {
-	int error = EOPNOTSUPP;
+	int error;
 
 	bcopy(data, md->md_magic, sizeof(md->md_magic));
 	if (strcmp(md->md_magic, ELI_MAGIC))
@@ -319,6 +318,7 @@ eli_metadata_decode(u_char *data, struct eli_metadata *md)
 		error = EOPNOTSUPP;
 		break;
 	}
+
 	return (error);
 }
 

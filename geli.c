@@ -19,7 +19,7 @@ uint8_t retval;
 #define ERR_SYSCALL(msg)	ERR(errno, msg, strerror(errno))
 #define ERR_FAILURE(msg, str)	ERR(EXIT_FAILURE, msg, str)
 
-#define ERR_HANDLE()		do { if (errmsg) { log_err("%s: %s", errmsg, errstr); } } while(0)
+#define ERR_HANDLE()		do { if (errmsg) { log_err("%s: %s", errmsg, errstr); errmsg = NULL; errstr = NULL; } } while(0)
 
 /*
  * Passphrase cached during load, in order to be more user-friendly if
@@ -30,8 +30,6 @@ static char cached_passphrase[BUFSIZE];
 void
 sig_handler(int sig)
 {
-	struct eli_softc *sc = &eli_sc;
-
 	switch (sig) {
 	case SIGINT:
 	case SIGTERM:
@@ -41,27 +39,36 @@ sig_handler(int sig)
 		return;
 	}
 
-	/* Close all possible file descriptors */
-	close(sc->sc_ifd);
-	close(sc->sc_nbd);
-	close(sc->sc_pair[0]);
-	close(sc->sc_pair[1]);
-
-	explicit_bzero(sc, sizeof *sc);
-
 	exit(0);
 }
 
 static void
-fetch_env_passphrase(void)
+fetch_passphrase(const char *passfile)
 {
+	int fd;
 	char *env_passphrase;
 
-	if ((env_passphrase = getenv("passphrase")) != NULL) {
-		/* Extract passphrase from the environment. */
+	if (passfile) {
+		if (strcmp(passfile, "-") == 0)
+			fd = STDIN_FILENO;
+		else if ((fd = open(passfile, O_RDONLY)) < 0) {
+			ERR_SYSCALL("Cannot open passfile");
+			goto out;
+		} else  if (read_data(fd, (u_char *)cached_passphrase, sizeof cached_passphrase)) {
+			ERR_SYSCALL("Cannot read passfile");
+			goto out;
+		}
+		if (fd != STDIN_FILENO)
+			close(fd);
+	} else if ((env_passphrase = getenv("passphrase")) != NULL) {
+		/* Extract passphrase from the environment variable. */
 		strlcpy(cached_passphrase, env_passphrase,
 		    sizeof(cached_passphrase));
 	}
+
+out:
+	ERR_HANDLE();
+	return;
 }
 
 int
@@ -84,7 +91,7 @@ eli_read_metadata(int fd, struct eli_metadata *md)
 }
 
 struct eli_softc *
-eli_create(const struct eli_metadata *md, int fd, int nbd, u_char *mkey, int nkey)
+eli_create(const struct eli_metadata *md, u_char *mkey, int nkey)
 {
 	struct eli_softc *sc;
 	u_int sectorsize;
@@ -98,26 +105,25 @@ eli_create(const struct eli_metadata *md, int fd, int nbd, u_char *mkey, int nke
 	eli_metadata_softc(sc, md, sectorsize, mediasize);
 	sc->sc_nkey = nkey;
 
-	sc->sc_ifd = fd;
-	sc->sc_nbd = nbd;
-
 	/* Remember the keys in our softc structure. */
 	eli_mkey_propagate(sc, mkey);
 
 	return sc;
 }
 
-#if 0
-int
-g_eli_destroy(struct eli_softc *sc, int force)
+void
+eli_destroy(struct eli_softc **sc)
 {
-	/* FIXME: IMPL */
-	if (sc == NULL)
-		return (ENXIO);
+	if (*sc == NULL)
+		return;
 
-	return 0;
+	explicit_bzero(*sc, sizeof(struct eli_softc));
+	*sc = NULL;
+
+	return;
 }
 
+#if 0
 static int
 eli_destroy_nbd(struct eli_softc *sc)
 {
@@ -126,7 +132,7 @@ eli_destroy_nbd(struct eli_softc *sc)
 #endif
 
 static void
-eli_crypto_run(struct eli_softc *sc, struct nbd_request *req, u_char *buf)
+eli_crypto_run(struct eli_softc *sc, int device_fd, struct nbd_request *req, u_char *buf)
 {
 	off_t dstoff;
 	u_int i, nsec, secsize, cmd;
@@ -139,11 +145,11 @@ eli_crypto_run(struct eli_softc *sc, struct nbd_request *req, u_char *buf)
 	data = buf;
 	secsize = sc->sc_sectorsize;
 	nsec = req->len / secsize;
-	lseek(sc->sc_ifd, req->from, SEEK_SET);
+	lseek(device_fd, req->from, SEEK_SET);
 	cmd = req->type & NBD_CMD_MASK_COMMAND;
 	for (i = 0, dstoff = req->from; i < nsec; i++, dstoff += secsize) {
 		if (cmd == NBD_CMD_READ)
-			read_data(sc->sc_ifd, data, secsize);
+			read_data(device_fd, data, secsize);
 		key = eli_key_hold(sc, dstoff, secsize);
 		key_sz = sc->sc_ekeylen;
 		if (sc->sc_ealgo == CRYPTO_AES_XTS)
@@ -183,134 +189,192 @@ eli_crypto_run(struct eli_softc *sc, struct nbd_request *req, u_char *buf)
 	}
 
 	if (cmd == NBD_CMD_WRITE)
-		write_data(sc->sc_ifd, buf, req->len);
+		write_data(device_fd, buf, req->len);
 }
 
 static void
-usage(FILE *f, int err, const char *fmt, ...)
+usage_init()
 {
-	if (fmt) {
-		va_list ap;
-		va_start(ap, fmt);
-		vfprintf(f, fmt, ap);
-		fprintf(f, "\n");
-		va_end(ap);
-	}
-
-	fprintf(f, "usage: "
-	           "geli init [-bdgPRTv] [-a aalgo] [-B backupfile] [-e ealgo]\n"
-	           "     [-i iterations] [-J newpassfile] [-K newkeyfile] [-l keylen]\n"
-	           "     [-s sectorsize] [-V version] prov\n"
-	           "geli attach [-vd] [-j passfile] prov nbd\n"
-	           "geli setkey [-v] [-i iterations] [-j passfile] [-J newpassfile] prov\n"
-	           "geli backup [-v] prov file\n"
-	           "geli restore [-vf] file prov\n"
-	           "geli resize [-v] -s oldsize prov\n"
-	           "geli version [-v]\n"
-	           "geli dump prov[-v]\n");
-
-	exit(err);
+	fprintf(stderr,
+	        "geli init [-bdgPRTv] [-a aalgo] [-B backupfile] [-e ealgo]\n"
+	        "     [-i iterations] [-J newpassfile] [-K newkeyfile] [-l keylen]\n"
+	        "     [-s sectorsize] [-V version] prov\n");
 }
 
-static int
-eli_nbd_create(struct eli_softc *sc)
+static void
+usage_attach()
+{
+	fprintf(stderr, "geli attach [-vd] [-j passfile] prov nbd\n");
+}
+
+static void
+usage_setkey()
+{
+	fprintf(stderr, "geli setkey [-v] [-n keyno] [-i iterations] [-j passfile] [-J newpassfile] prov\n");
+}
+
+static void
+usage_backup()
+{
+	fprintf(stderr,"geli backup [-v] prov file\n");
+}
+
+static void
+usage_restore()
+{
+	fprintf(stderr,"geli restore [-v] file prov\n");
+}
+
+static void
+usage_resize()
+{
+	fprintf(stderr,"geli resize [-v] -s oldsize prov\n");
+}
+
+static void
+usage_version()
+{
+	fprintf(stderr, "geli version [-v]\n");
+}
+
+static void
+usage_dump()
+{
+	fprintf(stderr, "geli dump prov[-v]\n");
+}
+
+static void
+usage()
+{
+	printf("usage:\n");
+	usage_init();
+	usage_attach();
+	usage_setkey();
+	usage_backup();
+	usage_restore();
+	usage_resize();
+	usage_version();
+	usage_dump();
+}
+
+static void
+eli_nbd_create(struct eli_softc *sc, int device_fd, int nbd_fd, int background)
 {
 	pid_t pid;
+	int pair[2];
 	off_t bytes;
-	uint64_t nblocks, blocksize = 512UL;
-	u_char *buf;
-	const char *errmsg = NULL, *errstr = NULL;
+	uint64_t nblocks, blocksize = 512UL; /* TODO: set blocksize 4K */
 
-	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, sc->sc_pair) < 0)
-		return EINVAL;
+	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, pair) < 0) {
+		ERR_SYSCALL("Cannot create stream sockets");
+		goto out;
+	}
 
-	bytes = lseek(sc->sc_ifd, 0, SEEK_END);
+	bytes = lseek(device_fd, 0, SEEK_END);
 	nblocks = (bytes - 512) / blocksize;
 	if (nblocks < 0) {
-		errmsg = "Cannot get provider media size";
+		ERR_FAILURE("Cannot get provider size", "Invalid size");
 		goto out;
 	}
 
-	if (ioctl(sc->sc_nbd, NBD_SET_SIZE, 4096UL) < 0) {
-		ERR_SYSCALL("Cannot check provider sector size");
+	if (ioctl(nbd_fd, NBD_SET_SIZE, 4096UL) < 0) {
+		ERR_SYSCALL("Cannot set NBD sector size");
 		goto out;
 	}
-	if (ioctl(sc->sc_nbd, NBD_SET_BLKSIZE, 4096UL) < 0) {
-		ERR_SYSCALL("Cannot check provider block size");
+	if (ioctl(nbd_fd, NBD_SET_BLKSIZE, 4096UL) < 0) {
+		ERR_SYSCALL("Cannot set NBD block size");
 		goto out;
 	}
-	if (ioctl(sc->sc_nbd, NBD_SET_SIZE, (unsigned long)blocksize) < 0) {
-		ERR_SYSCALL("Cannot set provider sector size");
-		goto out;
-	}
-	if (ioctl(sc->sc_nbd, NBD_SET_BLKSIZE, blocksize) < 0) {
-		ERR_SYSCALL("Cannot set provider block size");
-		goto out;
-	}
-	if (ioctl(sc->sc_nbd, NBD_SET_SIZE_BLOCKS, nblocks) < 0) {
-		ERR_SYSCALL("Cannot set provider size");
-		goto out;
-	}
-	if (ioctl(sc->sc_nbd, NBD_CLEAR_SOCK) < 0) {
-		ERR_SYSCALL("Cannot clear provider sockets");
-		goto out;
-	}
-	if (ioctl(sc->sc_nbd, NBD_SET_FLAGS, NBD_FLAG_HAS_FLAGS) < 0) {
-		ERR_SYSCALL("Cannot set provider server side");
-		goto out;
-	}
-	if (ioctl(sc->sc_nbd, NBD_SET_SOCK, sc->sc_pair[0]) < 0) {
-		ERR_SYSCALL("Cannot set provider sockets");
-		goto out;
-	}
-
-	signal(SIGINT, &sig_handler);
-	signal(SIGTERM, &sig_handler);
-	signal(SIGHUP, &sig_handler);
 
 	/* Daemonize */
-	if (daemonized) {
+	if (background) {
 		/* FIXME: https://stackoverflow.com/a/17955149 */
 		if ((pid = fork()) < 0) {
-			ERR_SYSCALL("Cannot fork");
+			ERR_SYSCALL("Cannot fork daemon");
 			goto out;
-		} else if (pid > 0) {
-			exit(0);
+		} else if (pid > 0)
+			exit(EXIT_SUCCESS);
+
+		if (setsid() < 0) {
+			ERR_SYSCALL("Cannot create session");
+			goto out;
 		}
+
+		/* TODO: install signal handlers */
+		if ((pid = fork()) < 0) {
+			ERR_SYSCALL("Cannot (second) fork daemon");
+			goto out;
+		} else if (pid > 0)
+			exit(EXIT_SUCCESS);
+
+		(void)chdir("/");
+
+		/* Closing all open files */
+		daemonized++;
+		close(STDIN_FILENO);
+		close(STDOUT_FILENO);
+		close(STDERR_FILENO);
 	}
 
+	/* Fork client/server */
 	if ((pid = fork()) < 0) {
 		ERR_SYSCALL("Cannot fork");
 		goto out;
 	}
 
-	if(pid > 0) {
-		/* Parent */
-		close(sc->sc_pair[1]);
-		while (1) {
-			if (ioctl(sc->sc_nbd, NBD_DO_IT) == 0)
-				break;
-			if (errno == EINTR)
-				continue;
-			ERR_SYSCALL("Cannot start NBD device");
-			goto out;
-		}
-		goto out;
+	/* Child: Client side */
+	if (pid == 0) {
+		eli_destroy(&sc);
+		close(device_fd);
+		close(pair[1]);
+
+		if (ioctl(nbd_fd, NBD_SET_SIZE, (unsigned long)blocksize) < 0)
+			ERR_SYSCALL("Cannot set NBD sector size");
+		else if (ioctl(nbd_fd, NBD_SET_BLKSIZE, blocksize) < 0)
+			ERR_SYSCALL("Cannot set NBD block size");
+		else if (ioctl(nbd_fd, NBD_SET_SIZE_BLOCKS, nblocks) < 0)
+			ERR_SYSCALL("Cannot set NBD size");
+		else if (ioctl(nbd_fd, NBD_CLEAR_SOCK) < 0)
+			ERR_SYSCALL("Cannot clear NBD sockets");
+		else if (ioctl(nbd_fd, NBD_SET_FLAGS, NBD_FLAG_HAS_FLAGS) < 0)
+			ERR_SYSCALL("Cannot set NBD server flag");
+		else if (ioctl(nbd_fd, NBD_SET_SOCK, pair[0]) < 0)
+			ERR_SYSCALL("Cannot set NBD sockets");
+		else if (ioctl(nbd_fd, NBD_DO_IT) < 0)
+			ERR_SYSCALL("Cannot start NBD server");
+
+		(void)ioctl(nbd_fd, NBD_CLEAR_QUE);
+		(void)ioctl(nbd_fd, NBD_CLEAR_SOCK);
+
+		close(pair[0]);
+		close(nbd_fd);
+
+		ERR_HANDLE();
+		exit(retval);
 	}
 
-	/* Child */
-	close(sc->sc_pair[0]);
-	close(sc->sc_nbd);
+	/* Server side*/
+	close(nbd_fd);
+	close(pair[0]);
+
+	/* FIXME: signal handling */
+	//signal(SIGINT, &sig_handler);
+	//signal(SIGTERM, &sig_handler);
+	//signal(SIGHUP, &sig_handler);
 
 	struct nbd_request request;
-	struct nbd_reply reply;
-
-	reply.error = 0;
-	reply.magic = htonl(NBD_REPLY_MAGIC);
+	struct nbd_reply reply = {.magic = htonl(NBD_REPLY_MAGIC)};
         while (1) {
-		read_data(sc->sc_pair[1], (u_char*) &request, sizeof(request));
-		if (request.magic != htonl(NBD_REQUEST_MAGIC))
+		u_char *buf;
+
+		if (read_data(pair[1], (u_char*) &request, sizeof(request)) < 0) {
+			ERR_SYSCALL("Cannot read request");
 			goto out;
+		}
+		if (request.magic != htonl(NBD_REQUEST_MAGIC)) {
+			ERR_FAILURE("Cannot validate NBD request", "Invalid magic");
+			goto out;
+		}
 
 		request.from = ntohll(request.from);
 		request.type = ntohl(request.type);
@@ -320,47 +384,42 @@ eli_nbd_create(struct eli_softc *sc)
 		switch (request.type & NBD_CMD_MASK_COMMAND) {
 		case NBD_CMD_DISC:	/* Soft Disconnect */
 			reply.error = 0;
-			write_data(sc->sc_pair[1], (u_char*)&reply, sizeof(reply));
-			break;
-		case NBD_CMD_READ:	/* Read */
+			write_data(pair[1], (u_char*)&reply, sizeof(reply));
+			goto out;
+		case NBD_CMD_READ:
 			if ((buf = malloc(request.len)) == NULL)
 				goto out;
 			reply.error = 0;
-			eli_crypto_run(sc, &request, buf);
-			write_data(sc->sc_pair[1], (u_char*)&reply, sizeof(reply));
-			write_data(sc->sc_pair[1], buf, request.len);
+			eli_crypto_run(sc, device_fd, &request, buf);
+			write_data(pair[1], (u_char*)&reply, sizeof(reply));
+			write_data(pair[1], buf, request.len);
 			free(buf);
 			break;
-		case NBD_CMD_WRITE:	/* Write */
+		case NBD_CMD_WRITE:
 			if ((buf = malloc(request.len)) == NULL)
 				goto out;
-			read_data(sc->sc_pair[1], buf, request.len);
-			eli_crypto_run(sc, &request, buf);
+			read_data(pair[1], buf, request.len);
+			eli_crypto_run(sc, device_fd, &request, buf);
 			reply.error = 0;
-			write_data(sc->sc_pair[1], (u_char*)&reply, sizeof(reply));
+			write_data(pair[1], (u_char*)&reply, sizeof(reply));
 			free(buf);
 			break;
 		case NBD_CMD_FLUSH:
+			fsync(device_fd);
+			reply.error = 0;
+			write_data(pair[1], (u_char*)&reply, sizeof(reply));
 		case NBD_CMD_TRIM:
 		default:
-			reply.error = 0;
+			reply.error = htonl(EIO);
+			write_data(pair[1], (u_char*)&reply, sizeof(reply));
 		}
 	}
 
 out:
-	close(sc->sc_pair[0]);
-	close(sc->sc_pair[1]);
-	close(sc->sc_nbd);
-	close(sc->sc_ifd);
-
-	if (ioctl(sc->sc_nbd, NBD_DO_IT) >= 0 || errno == EBADR) {
-		// Flush queue and exit
-		ioctl(sc->sc_nbd, NBD_CLEAR_QUE);
-		ioctl(sc->sc_nbd, NBD_CLEAR_SOCK);
-	}
+	close(pair[0]);
+	close(pair[1]);
 
 	ERR_HANDLE();
-	return retval;
 }
 
 static int
@@ -419,25 +478,12 @@ eli_metadata_read(char *prov, struct eli_metadata *md)
 {
 	uint32_t secsize = 512;
 	u_char sector[secsize];
-	const char *errmsg = NULL, *errstr = NULL;
 	int device_fd = -1;
 
 	if ((device_fd = open(prov, O_RDONLY)) < 0) {
 		ERR_SYSCALL("Cannot open device");
 		goto out;
 	}
-
-#if 0
-	if (ioctl(device_fd, BLKSSZGET, &secsize) < 0) {
-		ERR_SYSCALL("Cannot get device information");
-		goto out;
-	}
-
-	if ((sector = malloc(secsize)) == NULL) {
-		ERR_SYSCALL("Cannot allocate memory");
-		goto out;
-	}
-#endif
 
 	lseek(device_fd, -1 * 512, SEEK_END);
 	if (read_data(device_fd, sector, secsize)) {
@@ -451,10 +497,9 @@ eli_metadata_read(char *prov, struct eli_metadata *md)
 	}
 
 out:
+	close(device_fd);
 	explicit_bzero(&md, sizeof md);
 	explicit_bzero(&sector, secsize);
-
-	close(device_fd);
 
 	ERR_HANDLE();
 	return retval;
@@ -463,7 +508,7 @@ out:
 static int
 eli_init(int argc, char **argv)
 {
-	int device_fd = -1, passfile_fd = -1;
+	int device_fd = -1;
 	char ch;
 	struct eli_metadata md;
 	char *prov;
@@ -474,13 +519,9 @@ eli_init(int argc, char **argv)
 	uint16_t ealgo, keylen;
 	uint32_t iterations, secsize, val, version = ELI_VERSION;
 	uint64_t mediasize;
-	const char *errmsg = NULL, *errstr = NULL;
 
 	if (argc < 1)
 		usage(stderr, 1, NULL);
-
-	/* fetch passphrase from env */
-	fetch_env_passphrase();
 
 	/* User arguments */
 	while ((ch = getopt(argc, argv, "e:i:J:l:s:v")) != -1) {
@@ -509,8 +550,8 @@ eli_init(int argc, char **argv)
 	argv += optind;
 
 	if (argc != 1) {
-		errmsg = "Invalid arguments";
-		goto out;
+		usage_init();
+		exit(EXIT_FAILURE);
 	}
 
 	prov = argv[0];
@@ -559,26 +600,13 @@ eli_init(int argc, char **argv)
 			ERR_FAILURE("Cannot validate sector size", errstr);
 			goto out;
 		} else if (((val % secsize) != 0) || (val & (val - 1))) {
-			ERR_FAILURE("Cannot validate sector size", "Invalid sector size");
+			ERR_FAILURE("Cannot validate sector size", "Invalid sector size value");
 			goto out;
 		}
 		secsize = val;
 	}
 
-	/* FIXME: duplicated code */
-	if (passfile_str) {
-		if (strcmp(passfile_str, "-") == 0)
-			passfile_fd = STDIN_FILENO;
-		else if ((passfile_fd = open(passfile_str, O_RDONLY)) < 0) {
-			ERR_SYSCALL("Cannot open passfile");
-			goto out;
-		} else  if (read_data(passfile_fd, (u_char *)cached_passphrase, sizeof cached_passphrase)) {
-			ERR_SYSCALL("Cannot read passfile");
-			goto out;
-		}
-		if (passfile_fd != STDIN_FILENO)
-			close(passfile_fd);
-	}
+	fetch_passphrase(passfile_str);
 
 	strlcpy(md.md_magic, ELI_MAGIC, sizeof md.md_magic);
 	md.md_version = version;
@@ -625,22 +653,17 @@ out:
 static int
 eli_attach(int argc, char **argv)
 {
-	int error, nkey;
-	int passfile_fd = -1, device_fd = -1, nbd_fd = -1;
+	int error, nkey, d_flag = 0;
+	int device_fd = -1, nbd_fd = -1;
 	char ch, *prov, *nbd, *passfile_str = NULL;
-	const char *errmsg = NULL, *errstr = NULL;
 	u_char key[ELI_USERKEYLEN], mkey[ELI_DATAIVKEYLEN];
-	struct eli_softc *sc;
 	struct eli_metadata md;
-
-	/* fetch passphrase from env */
-	fetch_env_passphrase();
 
 	/* User arguments */
 	while ((ch = getopt(argc, argv, "dvj:")) != -1) {
 		switch (ch) {
 		case 'd':
-			daemonized++;
+			d_flag++;
 			break;
 		case 'v':
 			verbose++;
@@ -653,25 +676,14 @@ eli_attach(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc != 2)
-		usage(stderr, 1, "Invalid arguments");
+	if (argc != 2) {
+		usage_attach();
+		exit(EXIT_FAILURE);
+	}
 	prov = argv[0];
 	nbd = argv[1];
 
-	/* FIXME: duplicated code */
-	if (passfile_str) {
-		if (strcmp(passfile_str, "-") == 0)
-			passfile_fd = STDIN_FILENO;
-		else if ((passfile_fd = open(passfile_str, O_RDONLY)) < 0) {
-			ERR_SYSCALL("Cannot open passfile");
-			goto out;
-		} else  if (read_data(passfile_fd, (u_char *)cached_passphrase, sizeof cached_passphrase)) {
-			ERR_SYSCALL("Cannot read from passfile");
-			goto out;
-		}
-		if (passfile_fd != STDIN_FILENO)
-			close(passfile_fd);
-	}
+	fetch_passphrase(passfile_str);
 
 	/* Opening disk file */
 	if ((device_fd = open(prov, O_RDWR)) < 0) {
@@ -684,7 +696,7 @@ eli_attach(int argc, char **argv)
 	}
 
 	if (eli_read_metadata(device_fd, &md) != 0) {
-		ERR_FAILURE("Cannot read metadata", NULL); /* FIXME: */
+		ERR_FAILURE("Cannot read metadata", "Invalid device"); /* FIXME: */
 		goto out;
 	}
 
@@ -719,11 +731,10 @@ eli_attach(int argc, char **argv)
 		goto out;
 	}
 
-	sc = eli_create(&md, device_fd, nbd_fd, mkey, nkey);
-	if (sc == NULL)
-		exit(1);
+	struct eli_softc *sc = eli_create(&md, mkey, nkey);
+	eli_nbd_create(sc, device_fd, nbd_fd, d_flag);
+	explicit_bzero(&sc, sizeof *sc);
 
-	(void)eli_nbd_create(sc);
 out:
 	explicit_bzero(&md, sizeof md);
 	explicit_bzero(mkey, sizeof mkey);
@@ -740,12 +751,9 @@ eli_setkey(int argc, char **argv)
 {
 	struct eli_metadata md;
 	char *prov;
-	int error, iterations = -1;
-	const char *errmsg = NULL, *errstr = NULL;
+	int error, iterations = -1, keyno = -1;
 	char *passfile_str = NULL, *newpassfile_str = NULL;
-	int passfile_fd, newpassfile_fd, keyno = -1;
-	u_char key[ELI_USERKEYLEN], mkey[ELI_DATAIVKEYLEN];
-	u_char *mkeydst;
+	u_char key[ELI_USERKEYLEN], mkey[ELI_DATAIVKEYLEN], *mkeydst;
 	u_char sector[512];
 	char ch;
 	int device_fd = -1;
@@ -756,20 +764,19 @@ eli_setkey(int argc, char **argv)
 		case 'v':
 			verbose++;
 			break;
-#if 0
 		case 'n':
 			keyno = strtonum(optarg, 0, ELI_MAXMKEYS - 1, &errstr);
 			if (errstr) {
-				errmsg = "Invalid keyno";
-				goto out;
+				ERR_FAILURE("Cannot validate keyno", errstr);
+				exit(EXIT_FAILURE);
 			}
 			break;
-#endif
 		case 'i':
 			iterations = strtonum(optarg, 0, UINT32_MAX, &errstr);
 			if (errstr) {
-				errmsg = "Invalid iterations";
-				goto out;
+				ERR_FAILURE("Cannot validate iterations", errstr);
+				usage_setkey();
+				exit(EXIT_FAILURE);
 			}
 			break;
 		case 'j':
@@ -782,16 +789,18 @@ eli_setkey(int argc, char **argv)
 	}
 	argc -= optind;
 	argv += optind;
-	if (iterations == -1) {
-		ERR_FAILURE("Cannot setkey", "Iterations is required");
-		goto out;
-	}
 
 	if (argc != 1) {
-		ERR_FAILURE("Cannot setkey", "Invalid arguments");
-		goto out;
+		usage_setkey();
+		exit(EXIT_FAILURE);
 	}
 	prov = argv[0];
+
+	if (iterations < 0) {
+		fprintf(stderr, "Iterations is required\n");
+		usage_setkey();
+		exit(EXIT_FAILURE);
+	}
 
 	if ((device_fd = open(prov, O_RDWR)) < 0) {
 		ERR_SYSCALL("Cannot open device");
@@ -801,26 +810,13 @@ eli_setkey(int argc, char **argv)
 	if (eli_metadata_read(prov, &md))
 		goto out;
 
-	/* FIXME: prov should be dettached */
+	/* FIXME: prov should be exclusively opened */
 	if (md.md_keys == 0x0) {
 		ERR_FAILURE("Cannot validate metadata", "No valid keys");
 		goto out;
 	}
 
-	/* FIXME: duplicated code */
-	if (passfile_str) {
-		if (strcmp(passfile_str, "-") == 0)
-			passfile_fd = STDIN_FILENO;
-		else if ((passfile_fd = open(passfile_str, O_RDONLY)) < 0) {
-			ERR_SYSCALL("Cannot open passfile");
-			goto out;
-		} else  if (read_data(passfile_fd, (u_char *)cached_passphrase, sizeof cached_passphrase)) {
-			ERR_SYSCALL("Cannot read passfile");
-			goto out;
-		}
-		if (passfile_fd != STDIN_FILENO)
-			close(passfile_fd);
-	}
+	fetch_passphrase(passfile_str);
 
 	if (eli_genkey(&md, key) == NULL) {
 		ERR_FAILURE("Cannot generate key", "No key components given");
@@ -851,20 +847,7 @@ eli_setkey(int argc, char **argv)
 	bcopy(mkey, mkeydst, sizeof mkey);
 	explicit_bzero(mkey, sizeof mkey);
 
-	/* FIXME: duplicated code */
-	if (newpassfile_str) {
-		if (strcmp(newpassfile_str, "-") == 0)
-			newpassfile_fd = STDIN_FILENO;
-		else if ((newpassfile_fd = open(newpassfile_str, O_RDONLY)) < 0) {
-			ERR_SYSCALL("Cannot open newpassfile key");
-			goto out;
-		} else  if (read_data(newpassfile_fd, (u_char *)cached_passphrase, sizeof cached_passphrase)) {
-			ERR_SYSCALL("Cannot read newpassfile key");
-			goto out;
-		}
-		if (newpassfile_fd != STDIN_FILENO)
-			close(passfile_fd);
-	}
+	fetch_passphrase(newpassfile_str);
 
 	/* Generate key for Master Key encryption. */
 	if (eli_genkey(&md, key) == NULL) {
@@ -876,7 +859,7 @@ eli_setkey(int argc, char **argv)
 	error = eli_mkey_encrypt(md.md_ealgo, key, md.md_keylen, mkeydst);
 	explicit_bzero(key, sizeof key);
 	if (error) {
-		ERR_FAILURE("Cannot decrypt master key", "Invalid key");
+		ERR_FAILURE("Cannot encrypt master key", "Encryption failed");
 		goto out;
 	}
 
@@ -884,12 +867,12 @@ eli_setkey(int argc, char **argv)
 	eli_metadata_encode(&md, sector);
 
 	lseek(device_fd, -1 * sizeof sector, SEEK_END);
-	if (write_data(device_fd, sector, sizeof sector)) {
+	if (write_data(device_fd, sector, sizeof sector))
 		ERR_SYSCALL("Cannot store metadata on provider");
-		goto out;
-	}
 
 out:
+	close(device_fd);
+
 	explicit_bzero(sector, sizeof sector);
 	explicit_bzero(key, sizeof key);
 	explicit_bzero(&md, sizeof md);
@@ -904,24 +887,11 @@ eli_backup_create(char *prov, char *file)
 	uint32_t secsize = 512;
 	u_char sector[secsize];
 	int device_fd = -1, file_fd = -1;
-	const char *errmsg = NULL, *errstr = NULL;
 
 	if ((device_fd = open(prov, O_RDWR)) < 0) {
 		ERR_SYSCALL("Cannot open device");
 		goto out;
 	}
-
-#if 0
-	if (ioctl(device_fd, BLKSSZGET, &secsize) < 0) {
-		ERR_SYSCALL("Cannot get device information");
-		goto out;
-	}
-
-	if ((sector = malloc(secsize)) == NULL) {
-		ERR_SYSCALL("Cannot allocate memory");
-		goto out;
-	}
-#endif
 
 	lseek(device_fd, -1 * 512, SEEK_END);
 	if (read_data(device_fd, sector, secsize)) {
@@ -966,8 +936,10 @@ eli_backup(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc != 2)
-		usage(stderr, 1, NULL);
+	if (argc != 2) {
+		usage_backup();
+		exit(EXIT_FAILURE);
+	}
 
 	prov = argv[0];
 	file = argv[1];
@@ -977,7 +949,7 @@ eli_backup(int argc, char **argv)
 static int
 eli_restore(int argc, char **argv)
 {
-	int error, device_fd, force = 0;
+	int device_fd = -1;
 	char ch, *file, *prov;
 	uint64_t mediasize;
 	struct eli_metadata md;
@@ -985,9 +957,6 @@ eli_restore(int argc, char **argv)
 	/* User arguments */
 	while ((ch = getopt(argc, argv, "vf")) != -1) {
 		switch (ch) {
-		case 'f':
-			force++;
-			break;
 		case 'v':
 			verbose++;
 			break;
@@ -996,16 +965,18 @@ eli_restore(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc < 2)
-		usage(stderr, 1, NULL);
+	if (argc < 2) {
+		usage_restore();
+		exit(EXIT_FAILURE);
+	}
 
 	file = argv[0];
 	prov = argv[1];
 
 	/* Read metadata from the backup file. */
-	error = eli_metadata_read(file, &md);
-	if (error)
-		return error;
+	retval = eli_metadata_read(file, &md);
+	if (retval)
+		goto out;
 
 	if ((device_fd = open(prov, O_RDWR)) < 0) {
 		ERR_SYSCALL("Cannot open device");
@@ -1023,7 +994,7 @@ eli_restore(int argc, char **argv)
 		goto out;
 	}
 
-	lseek(device_fd, -512, SEEK_END);
+	lseek(device_fd, -1 * 512, SEEK_END);
 	if (write_data(device_fd, (u_char *)&md, sizeof md)) {
 		ERR_SYSCALL("Cannot write metadata to provider");
 		goto out;
@@ -1060,15 +1031,15 @@ eli_resize(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc != 1)
-		usage(stderr, 1, NULL);
-
-	if (oldsize_str == NULL)
-		usage(stderr, 1, "old size is required");
+	if (argc != 1 || !oldsize_str) {
+		usage_resize();
+		exit(EXIT_FAILURE);
+	}
 
 	oldsize = strtonum(oldsize_str, 2 * secsize, UINT32_MAX, &errstr);
 	if (errstr) {
 		ERR_FAILURE("Cannot validate oldsize", errstr);
+		goto out;
 	}
 
 	prov = argv[0];
@@ -1083,34 +1054,34 @@ eli_resize(int argc, char **argv)
 	}
 
 	if (oldsize == mediasize) {
-		printf("Size hasn't changed");
+		if (verbose)
+			printf("Size hasn't changed\n");
 		goto out;
 	}
 
 	lseek(device_fd, oldsize - secsize, SEEK_SET);
 	if (read_data(device_fd, sector, secsize)) {
-		ERR_SYSCALL("Cannot read device");
+		ERR_SYSCALL("Cannot read device metadata");
 		goto out;
 	}
 
 	if (eli_metadata_decode(sector, &md)) {
-		ERR_FAILURE("Cannot decode metadata", "Maybe wrong oldsize?");
+		ERR_FAILURE("Cannot validate metadata", "Maybe wrong oldsize?");
 		goto out;
 	}
-	
+
 	md.md_provsize = mediasize;
-	/* Write metadata to the provider. */
 	eli_metadata_encode(&md, sector);
-	lseek(device_fd, -512, SEEK_END);
+	lseek(device_fd, -1 * 512, SEEK_END);
 	if (write_data(device_fd, sector, secsize)) {
 		ERR_SYSCALL("Cannot write metadata");
 		goto out;
 	}
 
-	/* Now trash the old metadata. */
 	arc4random_buf(sector, secsize);
 	lseek(device_fd, oldsize - secsize, SEEK_SET);
-	(void)write_data(device_fd, sector, secsize);
+	if (write_data(device_fd, sector, secsize))
+		ERR_SYSCALL("Cannot trash the old metadata");
 
 out:
 	close(device_fd);
@@ -1135,8 +1106,10 @@ eli_version(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc != 0)
-		usage(stderr, 1, NULL);
+	if (argc != 0) {
+		usage_version(stderr, 1, NULL);
+		exit(EXIT_FAILURE);
+	}
 
 	printf("userland: %u\n", ELI_VERSION);
 	return 0;
@@ -1158,8 +1131,10 @@ eli_dump(int argc, char **argv)
 	}
 	argc -= optind;
 	argv += optind;
-	if (argc != 1)
-		usage(stderr, 1, NULL);
+	if (argc != 1) {
+		usage_dump();
+		exit(EXIT_FAILURE);
+	}
 
 	prov = argv[0];
 	if (eli_metadata_read(prov, &md))
@@ -1168,6 +1143,7 @@ eli_dump(int argc, char **argv)
 	printf("Metadata on %s:\n", prov);
 	eli_metadata_dump(&md);
 	printf("\n");
+
 	return 0;
 }
 
@@ -1176,12 +1152,15 @@ main(int argc, char **argv)
 {
 	char *verb;
 
-	if (argc < 2)
-		usage(stderr, 1, NULL);
+	if (argc < 2) {
+		usage();
+		exit(EXIT_FAILURE);
+	}
+
+	verb = argv[1];
 	argc -= 1;
 	argv += 1;
 	
-	verb = argv[0];
 	if (strcmp(verb, "init") == 0)
 		return eli_init(argc, argv);
 	else if (strcmp(verb, "attach") == 0)
@@ -1199,6 +1178,6 @@ main(int argc, char **argv)
 	else if (strcmp(verb, "dump") == 0)
 		return eli_dump(argc, argv);
 
-	usage(stderr, 1, "Unknown command");
+	usage();
 	return 1;
 }
