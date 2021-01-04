@@ -493,7 +493,7 @@ eli_init(int argc, char **argv)
 	u_char key[ELI_USERKEYLEN];
 	u_char sector[512];
 	uint16_t ealgo, keylen;
-	uint32_t iterations, secsize, flags = 0;
+	uint32_t iterations, secsize = 512, flags = 0;
 	uint64_t mediasize;
 	char *backupfile = NULL;
 
@@ -545,36 +545,52 @@ eli_init(int argc, char **argv)
 	}
 
 	prov = argv[0];
-	if ((device_fd = open(prov, O_RDWR)) < 0) {
-		ERR_SYSCALL("Cannot open device");
-		goto out;
-	}
 
 	if ((ealgo = g_eli_str2ealgo(ealgo_str)) < CRYPTO_ALGORITHM_MIN) {
-		ERR_FAILURE("Cannot access device", "Invalid encryption algorithm");
-		goto out;
+		usage("Invalid encryption algorithm %s", ealgo_str);
+		exit(EXIT_FAILURE);
 	} else if (!eli_ealgo_supprted(ealgo)) {
-		ERR_FAILURE("Cannot access device", "Unsupported encryption algorithm");
-		goto out;
+		usage("unsupported encryption algorithm %s", ealgo_str);
+		exit(EXIT_FAILURE);
 	}
 
 	if (iterations_str == NULL) {
-		ERR_FAILURE("Cannot access device", "Iterations are required");
-		goto out;
+		usage("Iterations argument is required");
+		exit(EXIT_FAILURE);
 	} else {
 		iterations = strtonum(iterations_str, 0, UINT32_MAX, &errstr);
 		if (errstr) {
-			ERR_FAILURE("Cannot validate iterations", errstr);
-			goto out;
+			usage("Invalid iterations argument: %s", errstr);
+			exit(EXIT_FAILURE);
 		}
 	}
 
 	keylen = strtonum(keylen_str, 0, UINT16_MAX, &errstr);
 	if (errstr) {
-		ERR_FAILURE("Cannot validate key length", errstr);
-		goto out;
+		usage("Invalid key length: %s", errstr);
+		exit(EXIT_FAILURE);
 	} else  if (eli_keylen(ealgo, keylen) == 0) {
-		ERR_FAILURE("Cannot validate key length", "Invalid key length");
+		usage("Invalid %s key length", ealgo_str);
+		exit(EXIT_FAILURE);
+	}
+
+#if 0
+	if (sectorsize_str) {
+		/* TODO: secsize should be smaller than pagesize */
+		val = strtonum(sectorsize_str, 0, UINT32_MAX, &errstr);
+		if (errstr) {
+			usage("Invalid sector size: %s", errstr);
+			exit(EXIT_FAILURE);
+		} else if (((val % secsize) != 0) || (val & (val - 1))) {
+			usage("Invalid sector size: %s", "Should be multiple of 512");
+			exit(EXIT_FAILURE);
+		}
+		secsize = val;
+	}
+#endif
+
+	if ((device_fd = open(prov, O_RDWR)) < 0) {
+		ERR_SYSCALL("Cannot open device");
 		goto out;
 	}
 
@@ -588,21 +604,6 @@ eli_init(int argc, char **argv)
 		ERR_SYSCALL("Cannot get device media size");
 		goto out;
 	}
-
-#if 0
-	if (sectorsize_str) {
-		/* TODO: secsize should be smaller than pagesize */
-		val = strtonum(sectorsize_str, 0, UINT32_MAX, &errstr);
-		if (errstr) {
-			ERR_FAILURE("Cannot validate sector size", errstr);
-			goto out;
-		} else if (((val % secsize) != 0) || (val & (val - 1))) {
-			ERR_FAILURE("Cannot validate sector size", "Invalid sector size value");
-			goto out;
-		}
-		secsize = val;
-	}
-#endif
 
 	fetch_passphrase(passfile_str);
 
@@ -770,7 +771,7 @@ eli_setkey(int argc, char **argv)
 	int device_fd = -1;
 
 	/* User arguments */
-	while ((ch = getopt(argc, argv, "vi:j:J:")) != -1) {
+	while ((ch = getopt(argc, argv, "vi:jn::J:")) != -1) {
 		switch (ch) {
 		case 'v':
 			verbose++;
@@ -778,14 +779,14 @@ eli_setkey(int argc, char **argv)
 		case 'n':
 			keyno = strtonum(optarg, 0, ELI_MAXMKEYS - 1, &errstr);
 			if (errstr) {
-				ERR_FAILURE("Cannot validate keyno", errstr);
+				usage("Invalid keyno: %s", errstr);
 				exit(EXIT_FAILURE);
 			}
 			break;
 		case 'i':
 			iterations = strtonum(optarg, 0, UINT32_MAX, &errstr);
 			if (errstr) {
-				usage("Invalid iterations");
+				usage("Invalid iterations: %s", errstr);
 				exit(EXIT_FAILURE);
 			}
 			break;
@@ -1050,8 +1051,8 @@ eli_resize(int argc, char **argv)
 
 	oldsize = strtonum(oldsize_str, 2 * secsize, UINT32_MAX, &errstr);
 	if (errstr) {
-		ERR_FAILURE("Cannot validate oldsize", errstr);
-		goto out;
+		usage("Invalid oldsize (%s)", errstr);
+		exit(EXIT_FAILURE);
 	}
 
 	prov = argv[0];
