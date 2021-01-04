@@ -200,68 +200,37 @@ eli_crypto_run(struct eli_softc *sc, int device_fd, struct nbd_request *req, u_c
 }
 
 static void
-usage_init()
+usage(const char *fmt, ...)
 {
-	fprintf(stderr,
-	        "geli init [-bdgPRTv] [-a aalgo] [-B backupfile] [-e ealgo]\n"
-	        "     [-i iterations] [-J newpassfile] [-K newkeyfile] [-l keylen]\n"
-	        "     [-s sectorsize] [-V version] prov\n");
+	FILE *fp = fmt ? stderr : stdout;
+	va_list ap;
+
+	if (fmt) {
+		fprintf(fp, "geli: ");
+		va_start(ap, fmt);
+		vfprintf(fp, fmt, ap);
+		va_end(ap);
+		fprintf(fp, "\n");
+	}
+
+	fprintf(fp,
+	        "usage: geli init [-bgv] [-B backupfile] [-e ealgo] [-i iterations] [-J newpassfile] [-l keylen] prov\n"
+	        "       geli label - an alias for 'init'\n"
+	        "       geli attach [-vd] [-j passfile] prov nbd\n"
+	        "       geli setkey [-v] [-n keyno] [-i iterations] [-j passfile] [-J newpassfile] prov\n"
+	        "       geli backup [-v] prov file\n"
+	        "       geli restore [-v] file prov\n"
+	        "       geli resize [-v] -s oldsize prov\n"
+	        "       geli version [-v]\n"
+	        "       geli dump prov[-v]\n"
+	        "       geli help\n");
 }
 
-static void
-usage_attach()
+static int
+eli_help()
 {
-	fprintf(stderr, "geli attach [-vd] [-j passfile] prov nbd\n");
-}
-
-static void
-usage_setkey()
-{
-	fprintf(stderr, "geli setkey [-v] [-n keyno] [-i iterations] [-j passfile] [-J newpassfile] prov\n");
-}
-
-static void
-usage_backup()
-{
-	fprintf(stderr,"geli backup [-v] prov file\n");
-}
-
-static void
-usage_restore()
-{
-	fprintf(stderr,"geli restore [-v] file prov\n");
-}
-
-static void
-usage_resize()
-{
-	fprintf(stderr,"geli resize [-v] -s oldsize prov\n");
-}
-
-static void
-usage_version()
-{
-	fprintf(stderr, "geli version [-v]\n");
-}
-
-static void
-usage_dump()
-{
-	fprintf(stderr, "geli dump prov[-v]\n");
-}
-
-static void
-usage()
-{
-	printf("usage:\n");
-	usage_init();
-	usage_attach();
-	usage_setkey();
-	usage_backup();
-	usage_restore();
-	usage_resize();
-	usage_version();
-	usage_dump();
+	usage(NULL);
+	return 0;
 }
 
 static void
@@ -528,8 +497,10 @@ eli_init(int argc, char **argv)
 	uint64_t mediasize;
 	char *backupfile = NULL;
 
-	if (argc < 1)
-		usage(stderr, 1, NULL);
+	if (argc < 1) {
+		usage("Invalid arguments");
+		exit(EXIT_FAILURE);
+	}
 
 	/* User arguments */
 	while ((ch = getopt(argc, argv, "bB:ge:i:J:l:v")) != -1) {
@@ -569,7 +540,7 @@ eli_init(int argc, char **argv)
 	argv += optind;
 
 	if (argc != 1) {
-		usage_init();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 
@@ -717,7 +688,7 @@ eli_attach(int argc, char **argv)
 	argv += optind;
 
 	if (argc != 2) {
-		usage_attach();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 	prov = argv[0];
@@ -814,8 +785,7 @@ eli_setkey(int argc, char **argv)
 		case 'i':
 			iterations = strtonum(optarg, 0, UINT32_MAX, &errstr);
 			if (errstr) {
-				ERR_FAILURE("Cannot validate iterations", errstr);
-				usage_setkey();
+				usage("Invalid iterations");
 				exit(EXIT_FAILURE);
 			}
 			break;
@@ -831,14 +801,13 @@ eli_setkey(int argc, char **argv)
 	argv += optind;
 
 	if (argc != 1) {
-		usage_setkey();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 	prov = argv[0];
 
 	if (iterations < 0) {
-		fprintf(stderr, "Iterations is required\n");
-		usage_setkey();
+		usage("Iterations is required");
 		exit(EXIT_FAILURE);
 	}
 
@@ -977,7 +946,7 @@ eli_backup(int argc, char **argv)
 	argv += optind;
 
 	if (argc != 2) {
-		usage_backup();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1006,7 +975,7 @@ eli_restore(int argc, char **argv)
 	argv += optind;
 
 	if (argc < 2) {
-		usage_restore();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1071,8 +1040,11 @@ eli_resize(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 
-	if (argc != 1 || !oldsize_str) {
-		usage_resize();
+	if (argc != 1) {
+		usage("Invalid arguments");
+		exit(EXIT_FAILURE);
+	} else if (!oldsize_str) {
+		usage("Oldsize is required");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1147,7 +1119,7 @@ eli_version(int argc, char **argv)
 	argv += optind;
 
 	if (argc != 0) {
-		usage_version(stderr, 1, NULL);
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1172,7 +1144,7 @@ eli_dump(int argc, char **argv)
 	argc -= optind;
 	argv += optind;
 	if (argc != 1) {
-		usage_dump();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1193,7 +1165,7 @@ main(int argc, char **argv)
 	char *verb;
 
 	if (argc < 2) {
-		usage();
+		usage("Invalid arguments");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1217,7 +1189,9 @@ main(int argc, char **argv)
 		return eli_version(argc, argv);
 	else if (strcmp(verb, "dump") == 0)
 		return eli_dump(argc, argv);
+	else if (strcmp(verb, "help") == 0)
+		return eli_help();
 
-	usage();
+	usage("Invalid arguments");
 	return 1;
 }
