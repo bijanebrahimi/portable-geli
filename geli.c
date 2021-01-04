@@ -444,7 +444,7 @@ eli_genkey_passphrase(struct eli_metadata *md, struct hmac_ctx *ctxp)
 		ptr = getpass("Enter Password: ");
 		if (strlen(ptr) == 0)
 			return 1;
-		strlcpy(passbuf, ptr, strlen(ptr));
+		strlcpy(passbuf, ptr, sizeof passbuf);
 		explicit_bzero(ptr, strlen(ptr));
 	}
 
@@ -515,24 +515,34 @@ out:
 static int
 eli_init(int argc, char **argv)
 {
-	int device_fd = -1;
+	int device_fd = -1, backup_fd = -1;
 	char ch;
 	struct eli_metadata md;
 	char *prov;
 	char *ealgo_str = "aes-xts", *iterations_str = NULL, *passfile_str = NULL,
-	     *keylen_str = "128", *sectorsize_str = NULL;
+	     *keylen_str = "128";
 	u_char key[ELI_USERKEYLEN];
 	u_char sector[512];
 	uint16_t ealgo, keylen;
-	uint32_t iterations, secsize, val, version = ELI_VERSION;
+	uint32_t iterations, secsize, flags = 0;
 	uint64_t mediasize;
+	char *backupfile = NULL;
 
 	if (argc < 1)
 		usage(stderr, 1, NULL);
 
 	/* User arguments */
-	while ((ch = getopt(argc, argv, "e:i:J:l:s:v")) != -1) {
+	while ((ch = getopt(argc, argv, "bB:ge:i:J:l:v")) != -1) {
 		switch (ch) {
+		case 'b':
+			flags |= ELI_FLAG_BOOT;
+			break;
+		case 'B':
+			backupfile = optarg;
+			break;
+		case 'g':
+			flags |= ELI_FLAG_GELIBOOT;
+			break;
 		case 'e':
 			ealgo_str = optarg;
 			break;
@@ -545,9 +555,11 @@ eli_init(int argc, char **argv)
 		case 'l':
 			keylen_str = optarg;
 			break;
+#if 0
 		case 's':
 			sectorsize_str = optarg;
 			break;
+#endif
 		case 'v':
 			verbose++;
 			break;
@@ -570,7 +582,7 @@ eli_init(int argc, char **argv)
 	if ((ealgo = g_eli_str2ealgo(ealgo_str)) < CRYPTO_ALGORITHM_MIN) {
 		ERR_FAILURE("Cannot access device", "Invalid encryption algorithm");
 		goto out;
-	} else if (eli_ealgo_supprted(ealgo)) {
+	} else if (!eli_ealgo_supprted(ealgo)) {
 		ERR_FAILURE("Cannot access device", "Unsupported encryption algorithm");
 		goto out;
 	}
@@ -598,11 +610,15 @@ eli_init(int argc, char **argv)
 	if (ioctl(device_fd, BLKSSZGET, &secsize) < 0) {
 		ERR_SYSCALL("Cannot get device sector size");
 		goto out;
+	} else if (secsize != 512) {
+		ERR_FAILURE("Cannot initialize device", "Unsuported size");
+		goto out;
 	} else if (ioctl(device_fd, BLKGETSIZE64, &mediasize) < 0) {
 		ERR_SYSCALL("Cannot get device media size");
 		goto out;
 	}
 
+#if 0
 	if (sectorsize_str) {
 		/* TODO: secsize should be smaller than pagesize */
 		val = strtonum(sectorsize_str, 0, UINT32_MAX, &errstr);
@@ -615,12 +631,13 @@ eli_init(int argc, char **argv)
 		}
 		secsize = val;
 	}
+#endif
 
 	fetch_passphrase(passfile_str);
 
 	strlcpy(md.md_magic, ELI_MAGIC, sizeof md.md_magic);
-	md.md_version = version;
-	md.md_flags = 0x0;
+	md.md_version = ELI_VERSION;
+	md.md_flags = flags;
 	md.md_ealgo = ealgo;
 	md.md_keylen = keylen;
 	md.md_aalgo = 0x0;
@@ -643,6 +660,19 @@ eli_init(int argc, char **argv)
 
 	/* Convert metadata to on-disk format. */
 	eli_metadata_encode(&md, sector);
+
+	if (backupfile) {
+		if ((backup_fd = open(backupfile, O_WRONLY | O_TRUNC | O_CREAT, 0600)) < 0) {
+			ERR_SYSCALL("Cannot create backupfile");
+			goto out;
+		}
+		if (write_data(backup_fd, sector, sizeof sector)) {
+			close(backup_fd);
+			ERR_SYSCALL("Cannot store metadata on backupfile");
+			goto out;
+		}
+		close(backup_fd);
+	}
 
 	lseek(device_fd, -1 * sizeof sector, SEEK_END);
 	if (write_data(device_fd, sector, sizeof sector)) {
@@ -1171,7 +1201,7 @@ main(int argc, char **argv)
 	argc -= 1;
 	argv += 1;
 	
-	if (strcmp(verb, "init") == 0)
+	if (strcmp(verb, "init") == 0 || strcmp(verb, "label") == 0)
 		return eli_init(argc, argv);
 	else if (strcmp(verb, "attach") == 0)
 		return eli_attach(argc, argv);

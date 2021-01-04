@@ -4,8 +4,8 @@
         aes-xts-256-150.md
 
 TESTS	:= $(wildcard *.md)
-LOOPBACK:= /dev/loop1
-NBD	:= /dev/nbd21
+LOOPBACK:= /dev/loop0
+NBD	:= /dev/nbd0
 MOUNTDIR:= mnt
 
 all: aes-xts-128-0.md

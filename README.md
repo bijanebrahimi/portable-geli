@@ -6,6 +6,7 @@
 ## Supported Operations
 - `dump`
 - `init`
+- `label`
 - `attach`
 - `backup`
 - `restore`

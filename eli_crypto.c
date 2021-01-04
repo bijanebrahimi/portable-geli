@@ -53,6 +53,7 @@ eli_crypto_cipher(u_int algo, int enc, u_char *data, size_t data_sz,
 	}
 	assert(out_sz == 0);
 
+	explicit_bzero(&ctx, sizeof ctx);
 	return 0;
 }
 
