@@ -175,7 +175,6 @@ struct eli_key {
 	TAILQ_ENTRY(eli_key) ek_next;
 };
 
-/* TODO: turn into named-struct */
 struct eli_metadata {
 	char		md_magic[16];
 	uint32_t	md_version;
