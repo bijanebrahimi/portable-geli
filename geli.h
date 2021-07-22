@@ -161,7 +161,7 @@ struct eli_softc {
 	size_t		 sc_sectorsize;
 	u_int		 sc_bytes_per_sector;
 	u_int		 sc_data_per_sector;
-} eli_sc;
+};
 
 #define	ELI_KEY_MAGIC	0xe11341c
 

@@ -10,6 +10,7 @@
 
 /* Globals */
 int verbose;
+struct eli_softc eli_sc;
 
 const char *errmsg;
 const char *errstr;
