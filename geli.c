@@ -131,8 +131,12 @@ eli_crypto_run(struct eli_softc *sc, int device_fd, struct nbd_request *req, u_c
 	u_char *data;
 	uint8_t *key, iv[ELI_IVKEYLEN], out[sc->sc_sectorsize];
 	size_t key_sz;
-	EVP_CIPHER_CTX ctx;
+	EVP_CIPHER_CTX *ctx;
 	const EVP_CIPHER *type;
+
+	/* FIXME: write error before return */
+	if ((ctx = EVP_CIPHER_CTX_new()) == NULL)
+		return;
 
 	data = buf;
 	secsize = sc->sc_sectorsize;
@@ -179,21 +183,24 @@ eli_crypto_run(struct eli_softc *sc, int device_fd, struct nbd_request *req, u_c
 
 		int out_len, final_out_len;
 		if (cmd == NBD_CMD_READ) {
-			EVP_DecryptInit(&ctx, type, key, iv);
-			EVP_DecryptUpdate(&ctx, data, &out_len, data, secsize);
-			EVP_DecryptFinal_ex(&ctx, out + out_len, &final_out_len);
-			EVP_CIPHER_CTX_cleanup(&ctx);
+			EVP_DecryptInit(ctx, type, key, iv);
+			EVP_DecryptInit(ctx, type, key, iv);
+			EVP_DecryptUpdate(ctx, data, &out_len, data, secsize);
+			EVP_DecryptFinal_ex(ctx, out + out_len, &final_out_len);
+			EVP_CIPHER_CTX_reset(ctx);
 		} else {
-			EVP_EncryptInit(&ctx, type, key, iv);
-			EVP_EncryptUpdate(&ctx, data, &out_len, data, secsize);
-			EVP_EncryptFinal_ex(&ctx, out + out_len, &final_out_len);
-			EVP_CIPHER_CTX_cleanup(&ctx);
+			EVP_EncryptInit(ctx, type, key, iv);
+			EVP_EncryptUpdate(ctx, data, &out_len, data, secsize);
+			EVP_EncryptFinal_ex(ctx, out + out_len, &final_out_len);
+			EVP_CIPHER_CTX_reset(ctx);
 		}
 		if (out_len + final_out_len != secsize)
 			errx(1, "EVP final_data_len %ld != %d + %d",
 			     sizeof data, out_len, final_out_len);
 		data += secsize;
 	}
+
+	EVP_CIPHER_CTX_free(ctx);
 
 	if (cmd == NBD_CMD_WRITE)
 		write_data(device_fd, buf, req->len);
@@ -745,7 +752,7 @@ eli_attach(int argc, char **argv)
 
 	struct eli_softc *sc = eli_create(&md, mkey, nkey);
 	eli_nbd_create(sc, device_fd, nbd_fd, d_flag);
-	explicit_bzero(&sc, sizeof *sc);
+	explicit_bzero(sc, sizeof *sc);
 
 out:
 	explicit_bzero(&md, sizeof md);

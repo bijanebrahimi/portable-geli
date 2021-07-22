@@ -5,7 +5,7 @@ int
 eli_crypto_cipher(u_int algo, int enc, u_char *data, size_t data_sz,
                   const u_char *key, size_t key_sz)
 {
-	EVP_CIPHER_CTX ctx;
+	EVP_CIPHER_CTX *ctx;
 	const EVP_CIPHER *type;
 	u_char iv[key_sz];
 	int out_sz;
@@ -33,27 +33,29 @@ eli_crypto_cipher(u_int algo, int enc, u_char *data, size_t data_sz,
 		return EINVAL;
 	}
 
-	EVP_CIPHER_CTX_init(&ctx);
-	EVP_CipherInit_ex(&ctx, type, NULL, NULL, NULL, enc);
-	EVP_CIPHER_CTX_set_key_length(&ctx, key_sz / 8);
-	EVP_CIPHER_CTX_set_padding(&ctx, 0);
+	if ((ctx = EVP_CIPHER_CTX_new()) == NULL)
+		return ENOMEM;
+
+	EVP_CipherInit_ex(ctx, type, NULL, NULL, NULL, enc);
+	EVP_CIPHER_CTX_set_key_length(ctx, key_sz / 8);
+	EVP_CIPHER_CTX_set_padding(ctx, 0);
 
 	explicit_bzero(iv, sizeof iv);
-	EVP_CipherInit_ex(&ctx, NULL, NULL, key, iv, enc);
+	EVP_CipherInit_ex(ctx, NULL, NULL, key, iv, enc);
 
-	if (EVP_CipherUpdate(&ctx, data, &out_sz, data, data_sz) == 0) {
-		explicit_bzero(&ctx, sizeof ctx);
+	if (EVP_CipherUpdate(ctx, data, &out_sz, data, data_sz) == 0) {
+		EVP_CIPHER_CTX_free(ctx);
 		return EINVAL;
 	}
 	assert(out_sz == (int)data_sz);
 
-	if (EVP_CipherFinal_ex(&ctx, data + out_sz, &out_sz) == 0) {
-		explicit_bzero(&ctx, sizeof ctx);
+	if (EVP_CipherFinal_ex(ctx, data + out_sz, &out_sz) == 0) {
+		EVP_CIPHER_CTX_free(ctx);
 		return EINVAL;
 	}
 	assert(out_sz == 0);
 
-	explicit_bzero(&ctx, sizeof ctx);
+	EVP_CIPHER_CTX_free(ctx);
 	return 0;
 }
 
