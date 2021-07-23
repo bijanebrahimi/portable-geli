@@ -32,6 +32,9 @@
 
 #include "endian.h"
 
+enum _bool {false = 0, true = 1};
+typedef enum _bool bool;
+
 #define	ELI_MAGIC		"GEOM::ELI"
 
 /*
@@ -434,6 +437,34 @@ eli_metadata_dump(const struct eli_metadata *md)
 	}
 	str[sizeof(md->md_hash) * 2] = '\0';
 	printf("  MD5 hash: %s\n", str);
+}
+
+static __inline bool
+eli_metadata_crypto_supported(const struct eli_metadata *md)
+{
+
+	switch (md->md_ealgo) {
+	case CRYPTO_NULL_CBC:
+	case CRYPTO_AES_CBC:
+	case CRYPTO_CAMELLIA_CBC:
+		return (false);
+	case CRYPTO_AES_XTS:
+		break;
+	default:
+		return (false);
+	}
+	if (md->md_flags & ELI_FLAG_AUTH) {
+		switch (md->md_aalgo) {
+		case CRYPTO_SHA1_HMAC:
+		case CRYPTO_RIPEMD160_HMAC:
+		case CRYPTO_SHA2_256_HMAC:
+		case CRYPTO_SHA2_384_HMAC:
+		case CRYPTO_SHA2_512_HMAC:
+		default:
+			return (false);
+		}
+	}
+	return (true);
 }
 
 static __inline u_int

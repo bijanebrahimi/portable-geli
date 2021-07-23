@@ -494,13 +494,12 @@ eli_init(int argc, char **argv)
 {
 	int device_fd = -1, backup_fd = -1;
 	char ch;
-	struct eli_metadata md;
+	struct eli_metadata md = {0};
 	char *prov;
 	char *ealgo_str = "aes-xts", *iterations_str = NULL, *passfile_str = NULL,
 	     *keylen_str = "128";
 	u_char key[ELI_USERKEYLEN];
 	u_char sector[512];
-	uint16_t ealgo, keylen;
 	uint32_t iterations, secsize = 512, flags = 0;
 	uint64_t mediasize;
 	char *backupfile = NULL;
@@ -554,10 +553,10 @@ eli_init(int argc, char **argv)
 
 	prov = argv[0];
 
-	if ((ealgo = g_eli_str2ealgo(ealgo_str)) < CRYPTO_ALGORITHM_MIN) {
+	if ((md.md_ealgo = g_eli_str2ealgo(ealgo_str)) < CRYPTO_ALGORITHM_MIN) {
 		usage("Invalid encryption algorithm %s", ealgo_str);
 		exit(EXIT_FAILURE);
-	} else if (!eli_ealgo_supprted(ealgo)) {
+	} else if (!eli_metadata_crypto_supported(&md)) {
 		usage("unsupported encryption algorithm %s", ealgo_str);
 		exit(EXIT_FAILURE);
 	}
@@ -573,11 +572,11 @@ eli_init(int argc, char **argv)
 		}
 	}
 
-	keylen = strtonum(keylen_str, 0, UINT16_MAX, &errstr);
+	md.md_keylen = strtonum(keylen_str, 0, UINT16_MAX, &errstr);
 	if (errstr) {
 		usage("Invalid key length: %s", errstr);
 		exit(EXIT_FAILURE);
-	} else  if (eli_keylen(ealgo, keylen) == 0) {
+	} else  if (eli_keylen(md.md_ealgo, md.md_keylen) == 0) {
 		usage("Invalid %s key length", ealgo_str);
 		exit(EXIT_FAILURE);
 	}
@@ -618,8 +617,6 @@ eli_init(int argc, char **argv)
 	strlcpy(md.md_magic, ELI_MAGIC, sizeof md.md_magic);
 	md.md_version = ELI_VERSION;
 	md.md_flags = flags;
-	md.md_ealgo = ealgo;
-	md.md_keylen = keylen;
 	md.md_aalgo = 0x0;
 	md.md_provsize = mediasize;
 	md.md_sectorsize = secsize;
@@ -677,7 +674,7 @@ eli_attach(int argc, char **argv)
 	int device_fd = -1, nbd_fd = -1;
 	char ch, *prov, *nbd, *passfile_str = NULL;
 	u_char key[ELI_USERKEYLEN], mkey[ELI_DATAIVKEYLEN];
-	struct eli_metadata md;
+	struct eli_metadata md = {0};
 
 	/* User arguments */
 	while ((ch = getopt(argc, argv, "dvj:")) != -1) {
@@ -733,7 +730,7 @@ eli_attach(int argc, char **argv)
 	} else if (md.md_iterations == -1) {
 		ERR_FAILURE("Cannot validate metadata", "Unsupported keyfile encryption");
 		goto out;
-	} else if (!eli_ealgo_supprted(md.md_ealgo)) {
+	} else if (eli_metadata_crypto_supported(&md)) {
 		ERR_FAILURE("Cannot validate metadata", "Unsupported encryption algorithm");
 		goto out;
 	}
