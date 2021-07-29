@@ -5,7 +5,7 @@ OBJECTS	:= $(SOURCES:.c=.o)
 HEADERS := $(wildcard *.h)
 TARGET	:= geli
 
-CFLAGS	= -g -Wall -I.
+CFLAGS	= -Wall -I. -O2
 LDFLAGS	= -lcrypto -lbsd
 
 $(TARGET): $(OBJECTS)
