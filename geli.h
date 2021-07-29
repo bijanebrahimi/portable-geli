@@ -408,7 +408,7 @@ eli_metadata_dump(const struct eli_metadata *md)
 	printf("     magic: %s\n", md->md_magic);
 	printf("   version: %u\n", md->md_version);
 	printf("     flags: 0x%x\n", md->md_flags);
-	printf("     ealgo: %s (%u)\n", eli_algo2str(md->md_ealgo), md->md_ealgo);
+	printf("     ealgo: %s\n", eli_algo2str(md->md_ealgo));
 	printf("    keylen: %u\n", md->md_keylen);
 	if (md->md_flags & ELI_FLAG_AUTH)
 		printf("     aalgo: %s (%u)\n", eli_algo2str(md->md_aalgo), md->md_aalgo);

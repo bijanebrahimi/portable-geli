@@ -730,7 +730,7 @@ eli_attach(int argc, char **argv)
 	} else if (md.md_iterations == -1) {
 		ERR_FAILURE("Cannot validate metadata", "Unsupported keyfile encryption");
 		goto out;
-	} else if (eli_metadata_crypto_supported(&md)) {
+	} else if (!eli_metadata_crypto_supported(&md)) {
 		ERR_FAILURE("Cannot validate metadata", "Unsupported encryption algorithm");
 		goto out;
 	}
