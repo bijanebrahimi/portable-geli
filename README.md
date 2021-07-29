@@ -22,8 +22,6 @@
 - Add support for **Authentication**.
 - Add support for `setkey` and `delkey` commands.
 
-
-
 ```
 unit=1
 for i in 128 192 256

@@ -1,4 +1,32 @@
-/* Copyright */
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2005-2019 Pawel Jakub Dawidek <pawel@dawidek.net>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ */
+
 #ifndef _GELI_H_
 #define _GELI_H_
 
@@ -140,6 +168,14 @@ typedef enum _bool bool;
 
 #define IVSIZE 			16
 
+/* Encryption algorithm block sizes */
+#define AES_BLOCK_LEN           16
+#define CAMELLIA_BLOCK_LEN      16
+
+/* IV Lengths */
+#define AES_XTS_IV_LEN			8
+
+
 struct eli_softc {
 	u_int		 sc_version;
 	u_int		 sc_crypto;
@@ -162,6 +198,7 @@ struct eli_softc {
 	int		 sc_inflight;
 	off_t		 sc_mediasize;
 	size_t		 sc_sectorsize;
+	off_t		 sc_provsize;
 	u_int		 sc_bytes_per_sector;
 	u_int		 sc_data_per_sector;
 };
@@ -190,6 +227,7 @@ struct eli_metadata {
 	uint8_t		md_keys;
 	int32_t		md_iterations;
 	uint8_t		md_salt[ELI_SALTLEN];
+	/* Encrypted master key (IV-key, Data-key, HMAC). */
 	uint8_t		md_mkeys[ELI_MAXMKEYS * ELI_MKEYLEN];
 	uint8_t		md_hash[MD5_DIGEST_LENGTH];
 } __attribute__((packed));
@@ -218,16 +256,16 @@ eli_metadata_encode_v1v2v3v4v5v6v7(struct eli_metadata *md, u_char **datap)
 	u_char *p;
 
 	p = *datap;
-	le32enc(p, md->md_flags);	p += sizeof md->md_flags;
-	le16enc(p, md->md_ealgo);	p += sizeof md->md_ealgo;
-	le16enc(p, md->md_keylen);	p += sizeof md->md_keylen;
-	le16enc(p, md->md_aalgo);	p += sizeof md->md_aalgo;
-	le64enc(p, md->md_provsize);	p += sizeof md->md_provsize;
-	le32enc(p, md->md_sectorsize);	p += sizeof md->md_sectorsize;
-	*p = md->md_keys;		p += sizeof md->md_keys;
-	le32enc(p, md->md_iterations);	p += sizeof md->md_iterations;
-	bcopy(md->md_salt, p, sizeof md->md_salt);	p += sizeof md->md_salt;
-	bcopy(md->md_mkeys, p, sizeof md->md_mkeys);	p += sizeof md->md_mkeys;
+	le32enc(p, md->md_flags);	p += sizeof(md->md_flags);
+	le16enc(p, md->md_ealgo);	p += sizeof(md->md_ealgo);
+	le16enc(p, md->md_keylen);	p += sizeof(md->md_keylen);
+	le16enc(p, md->md_aalgo);	p += sizeof(md->md_aalgo);
+	le64enc(p, md->md_provsize);	p += sizeof(md->md_provsize);
+	le32enc(p, md->md_sectorsize);	p += sizeof(md->md_sectorsize);
+	*p = md->md_keys;		p += sizeof(md->md_keys);
+	le32enc(p, md->md_iterations);	p += sizeof(md->md_iterations);
+	bcopy(md->md_salt, p, sizeof(md->md_salt)); p += sizeof(md->md_salt);
+	bcopy(md->md_mkeys, p, sizeof(md->md_mkeys)); p += sizeof(md->md_mkeys);
 	*datap = p;
 }
 
@@ -239,10 +277,13 @@ eli_metadata_encode(struct eli_metadata *md, u_char *data)
 	u_char *p;
 
 	p = data;
-	bcopy(md->md_magic, p, sizeof md->md_magic);	p += sizeof md->md_magic;
-	le32enc(p, md->md_version);			p += sizeof md->md_version;
+	bcopy(md->md_magic, p, sizeof(md->md_magic));
+	p += sizeof(md->md_magic);
+	le32enc(p, md->md_version);
+	p += sizeof(md->md_version);
 	switch (md->md_version) {
 	case ELI_VERSION_00:
+		eli_metadata_encode_v0(md, &p);
 		break;
 	case ELI_VERSION_01:
 	case ELI_VERSION_02:
@@ -254,13 +295,44 @@ eli_metadata_encode(struct eli_metadata *md, u_char *data)
 		eli_metadata_encode_v1v2v3v4v5v6v7(md, &p);
 		break;
 	default:
-		break;
+		errx(1, "Unsupported metadata version.");
 	}
 	MD5_Init(&ctx);
 	MD5_Update(&ctx, data, p - data);
 	MD5_Final((void *)hash, &ctx);
 	bcopy(hash, md->md_hash, sizeof md->md_hash);
 	bcopy(md->md_hash, p, sizeof md->md_hash);
+}
+
+static __inline int
+eli_metadata_decode_v0(u_char *data, struct eli_metadata *md)
+{
+	u_char hash[MD5_DIGEST_LENGTH];
+	MD5_CTX ctx;
+	u_char *p;
+
+	/* Already checked md_magic and md_version */
+	p = data + sizeof(md->md_magic) + sizeof(md->md_version);
+
+	md->md_flags = le32dec(p);	p += sizeof(md->md_flags);
+	md->md_ealgo = le16dec(p);	p += sizeof(md->md_ealgo);
+	/* Missing md_aalgo */
+	md->md_keylen = le16dec(p);	p += sizeof(md->md_keylen);
+	md->md_provsize = le64dec(p);	p += sizeof(md->md_provsize);
+	md->md_sectorsize = le32dec(p);	p += sizeof(md->md_sectorsize);
+	md->md_keys = *p;		p += sizeof(md->md_keys);
+	md->md_iterations = le32dec(p);	p += sizeof(md->md_iterations);
+	bcopy(p, md->md_salt, sizeof(md->md_salt)); p += sizeof(md->md_salt);
+	bcopy(p, md->md_mkeys, sizeof(md->md_mkeys)); p += sizeof(md->md_mkeys);
+	MD5_Init(&ctx);
+	MD5_Update(&ctx, data, p - data);
+	MD5_Final((void *)hash, &ctx);
+	bcopy(hash, md->md_hash, sizeof(md->md_hash));
+
+	if (bcmp(md->md_hash, p, sizeof(md->md_hash)) != 0)
+		return (EINVAL);
+
+	return (0);
 }
 
 static __inline int
@@ -300,12 +372,13 @@ eli_metadata_decode(u_char *data, struct eli_metadata *md)
 	int error;
 
 	bcopy(data, md->md_magic, sizeof(md->md_magic));
-	if (strcmp(md->md_magic, ELI_MAGIC))
-		return EINVAL;
+	if (strcmp(md->md_magic, ELI_MAGIC) != 0)
+		return (EINVAL);
 	md->md_version = le32dec(data + sizeof(md->md_magic));
+
 	switch (md->md_version) {
 	case ELI_VERSION_00:
-		error = EOPNOTSUPP;
+		error = eli_metadata_decode_v0(data, md);;
 		break;
 	case ELI_VERSION_01:
 	case ELI_VERSION_02:
@@ -337,18 +410,10 @@ g_eli_str2ealgo(const char *name)
 		return (CRYPTO_AES_CBC);
 	else if (strcasecmp("aes-xts", name) == 0)
 		return (CRYPTO_AES_XTS);
-	else if (strcasecmp("blowfish", name) == 0)
-		return (CRYPTO_BLF_CBC);
-	else if (strcasecmp("blowfish-cbc", name) == 0)
-		return (CRYPTO_BLF_CBC);
 	else if (strcasecmp("camellia", name) == 0)
 		return (CRYPTO_CAMELLIA_CBC);
 	else if (strcasecmp("camellia-cbc", name) == 0)
 		return (CRYPTO_CAMELLIA_CBC);
-	else if (strcasecmp("3des", name) == 0)
-		return (CRYPTO_3DES_CBC);
-	else if (strcasecmp("3des-cbc", name) == 0)
-		return (CRYPTO_3DES_CBC);
 	return (CRYPTO_ALGORITHM_MIN - 1);
 }
 
@@ -362,14 +427,8 @@ eli_algo2str(uint16_t algo)
 		return ("AES-CBC");
 	case CRYPTO_AES_XTS:
 		return ("AES-XTS");
-	case CRYPTO_BLF_CBC:
-		return ("Blowfish-CBC");
 	case CRYPTO_CAMELLIA_CBC:
 		return ("CAMELLIA-CBC");
-	case CRYPTO_3DES_CBC:
-		return ("3DES-CBC");
-	case CRYPTO_MD5_HMAC:
-		return ("HMAC/MD5");
 	case CRYPTO_SHA1_HMAC:
 		return ("HMAC/SHA1");
 	case CRYPTO_RIPEMD160_HMAC:
@@ -384,38 +443,25 @@ eli_algo2str(uint16_t algo)
 	return ("unknown");
 }
 
-static __inline int
-eli_ealgo_supprted(int ealgo)
-{
-	switch (ealgo) {
-	case CRYPTO_AES_XTS:
-#if 0
-	case CRYPTO_AES_CBC:
-#endif /* AES-CBC Support */
-		return 1;
-	default:
-		return 0;
-	}
-}
-
 static __inline void
 eli_metadata_dump(const struct eli_metadata *md)
 {
-	u_int i;
 	static const char hex[] = "0123456789abcdef";
 	char str[sizeof(md->md_mkeys) * 2 + 1];
+	u_int i;
 
 	printf("     magic: %s\n", md->md_magic);
-	printf("   version: %u\n", md->md_version);
-	printf("     flags: 0x%x\n", md->md_flags);
+	printf("   version: %u\n", (u_int)md->md_version);
+	printf("     flags: 0x%x\n", (u_int)md->md_flags);
 	printf("     ealgo: %s\n", eli_algo2str(md->md_ealgo));
-	printf("    keylen: %u\n", md->md_keylen);
+	printf("    keylen: %u\n", (u_int)md->md_keylen);
 	if (md->md_flags & ELI_FLAG_AUTH)
-		printf("     aalgo: %s (%u)\n", eli_algo2str(md->md_aalgo), md->md_aalgo);
-	printf("  provsize: %ju\n", md->md_provsize);
-	printf("sectorsize: %u\n", md->md_sectorsize);
-	printf("      keys: 0x%02x\n", md->md_keys);
-	printf("iterations: %u\n", md->md_iterations);
+		printf("     aalgo: %s\n", eli_algo2str(md->md_aalgo));
+	printf("  provsize: %ju\n", (uintmax_t)md->md_provsize);
+	printf("sectorsize: %u\n", (u_int)md->md_sectorsize);
+	printf("      keys: 0x%02x\n", (u_int)md->md_keys);
+	printf("iterations: %u\n", (u_int)md->md_iterations);
+
 	explicit_bzero(str, sizeof(str));
 	for (i = 0; i < sizeof(md->md_salt); i++) {
 		str[i * 2] = hex[md->md_salt[i] >> 4];
@@ -471,34 +517,59 @@ static __inline u_int
 eli_keylen(u_int algo, u_int keylen)
 {
 	switch (algo) {
-#if 0
+#ifdef NOT_YET
+	case CRYPTO_NULL_CBC:
+		if (keylen == 0)
+			keylen = 64 * 8;
+		else {
+			if (keylen > 64 * 8)
+				keylen = 0;
+		}
+		return (keylen);
+#endif /* TODO: add NULL_CBC support */
+#ifdef NOT_YET
 	case CRYPTO_AES_CBC:
 		switch (keylen) {
 		case 0:
-			return 128;
+			return (128);
 		case 128:
 		case 192:
 		case 256:
-			return keylen;
+			return (keylen);
 		default:
-			return 0;
+			return (0);
 		}
-#endif /* AES-CBC Support */
+#endif /* TODO: add AES_CBC Support */
 	case CRYPTO_AES_XTS:
 		switch (keylen) {
 		case 0:
-			return 128;
+			return (128);
 		case 128:
 		case 256:
-			return keylen;
+			return (keylen);
 		default:
-			return 0;
+			return (0);
 		}
 	default:
-		return 0;
+		return (0);
 	}
 }
 
+static __inline u_int
+eli_ivlen(u_int algo)
+{
+	switch (algo) {
+	case CRYPTO_AES_XTS:
+		return (AES_XTS_IV_LEN);
+	case CRYPTO_AES_CBC:
+		return (AES_BLOCK_LEN);
+	case CRYPTO_CAMELLIA_CBC:
+		return (CAMELLIA_BLOCK_LEN);
+	}
+	return (0);
+}
+
+#ifdef NOT_YET
 static u_int
 eli_hashlen(u_int algo)
 {
@@ -515,6 +586,23 @@ eli_hashlen(u_int algo)
 		return (64);
 	}
 	return (0);
+}
+#endif /* TODO: add ELI_FLAG_AUTH support */
+
+static __inline off_t
+eli_mediasize(const struct eli_softc *sc, off_t mediasize, u_int sectorsize)
+{
+	if ((sc->sc_flags & ELI_FLAG_ONETIME) == 0) {
+		mediasize -= sectorsize;
+	}
+	if ((sc->sc_flags & ELI_FLAG_AUTH) == 0) {
+		mediasize -= (mediasize % sc->sc_sectorsize);
+	} else {
+		mediasize /= sc->sc_bytes_per_sector;
+		mediasize *= sc->sc_sectorsize;
+	}
+
+	return (mediasize);
 }
 
 static __inline void
@@ -535,6 +623,7 @@ eli_metadata_softc(struct eli_softc *sc, const struct eli_metadata *md,
 		sc->sc_flags |= ELI_FLAG_ENC_IVKEY;
 	sc->sc_ealgo = md->md_ealgo;
 
+#ifdef NOT_YET
 	if (sc->sc_flags & ELI_FLAG_AUTH) {
 		sc->sc_akeylen = sizeof(sc->sc_akey) * 8;
 		sc->sc_aalgo = md->md_aalgo;
@@ -554,16 +643,10 @@ eli_metadata_softc(struct eli_softc *sc, const struct eli_metadata *md,
 		    (md->md_sectorsize - 1) / sc->sc_data_per_sector + 1;
 		sc->sc_bytes_per_sector *= sectorsize;
 	}
+#endif /* TODO: add ELI_FLAG_AUTH support */
+	sc->sc_provsize = mediasize;
 	sc->sc_sectorsize = md->md_sectorsize;
-	sc->sc_mediasize = mediasize;
-	if (!(sc->sc_flags & ELI_FLAG_ONETIME))
-		sc->sc_mediasize -= sectorsize;
-	if (sc->sc_flags & ELI_FLAG_AUTH) {
-		sc->sc_mediasize /= sc->sc_bytes_per_sector;
-		sc->sc_mediasize *= sc->sc_sectorsize;
-	} else {
-		sc->sc_mediasize -= (sc->sc_mediasize % sc->sc_sectorsize);
-	}
+	sc->sc_mediasize = eli_mediasize(sc, mediasize, sectorsize);
 	sc->sc_ekeylen = md->md_keylen;
 }
 
