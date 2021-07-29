@@ -1,6 +1,6 @@
 
 # Portable FreeBSD `geli`
-This is portable version FreeBSD [geli(8)][https://www.freebsd.org/cgi/man.cgi?geli]
+This is portable version FreeBSD [geli(8)](https://www.freebsd.org/cgi/man.cgi?geli)
 for GNU/Linux.
 
 Table of Contents:
