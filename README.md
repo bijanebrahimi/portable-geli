@@ -29,6 +29,9 @@ This project is presented AS IS. I started to use portable-geli in
 production for a few months with no regressions but you should decide
 for yourself before relying on it.
 
+For more technical information please read my blog posts:
+- [Portable GELI](http://bijanebrahimi.github.io/blog/portable-geli.html)
+
 # Manual
 ## Synapsis
 
