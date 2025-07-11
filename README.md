@@ -1,13 +1,11 @@
-
 # Portable FreeBSD `geli`
-This is portable version FreeBSD [geli(8)](https://www.freebsd.org/cgi/man.cgi?geli)
-for GNU/Linux.
+This is a portable version of FreeBSD [geli(8)](https://www.freebsd.org/cgi/man.cgi?geli) for GNU/Linux.
 
 Table of Contents:
 
-- [Projects Status](#projects-status)
+- [Project Status](#project-status)
 - [Manual](#manul)
-  - [Synapsis](#synapsis)
+  - [Synopsis](#synopsis)
     - [init](#init)
     - [attach](#attach)
     - [setkey](#setkey)
@@ -19,21 +17,18 @@ Table of Contents:
     - [help](#help)
   - [Examples](#examples)
 
-
-# Projects Status
+# Project Status
 Right Now only the **AES-XTS** Algorithm with Read/Write is supported.
-Support for **AES-CBC**, **PKCS5v2 iterration calculator** and
-**Authentication** support is under serious consideration.
+Support for **AES-CBC**, **PKCS5v2 iterration calculator** and **Authentication** support is under serious consideration.
 
-This project is presented AS IS. I started to use portable-geli in
-production for a few months with no regressions but you should decide
-for yourself before relying on it.
+This project is presented AS IS.
+I started to use portable-geli in production for a few months with no regressions, but you should decide for yourself before relying on it.
 
 For more technical information please read my blog posts:
 - [Portable GELI](http://bijanebrahimi.github.io/blog/portable-geli.html)
 
 # Manual
-## Synapsis
+## Synopsis
 
 ```
 geli init [-bgv] [-B backupfile] [-e ealgo]
@@ -52,110 +47,96 @@ geli help
 ```
 
 ## Description
-The first argument	to geli	indicates an action to be performed:
+The first argument to geli indicates an action to be performed:
 
 ### init
-Initialize providers which need to be encrypted.  Multiple providers are
-not supported. A unique salt will be randomly generated for provider
-to ensure the Master Key for is unique.  Here you can set up the
-cryptographic algorithm to use, Data Key length, etc. The last sector
-of the providers is used to store metadata. that the metadata can be
-recovered with the restore subcommand using the backupfile and backup
-action described below.
+Initialize providers which need to be encrypted.
+Multiple providers are not supported.
+A unique salt will be randomly generated for provider to ensure the Master Key for is unique.
+Here you can set up the cryptographic algorithm to use, Data Key length, etc.
+The last sector of the provider is used to store metadata.
+Metadata can be recovered with the restore subcommand using the backupfile and backup action described below.
 
 Additional options include:
 
 - `-b`
-Try to decrypt this partition during FreeBSD boot, before the root
-partition is mounted. This makes it possible to use an encrypted root
-partition for only the FreeBSD
+Try to decrypt this partition during FreeBSD boot, before the root partition is mounted.
+This makes it possible to use an encrypted root partition for only the FreeBSD
 
 - `-B backupfile`
-File name to use for metadata backup. To inhibit backups, you can avoid
-this option at command line.
+File name to use for metadata backup.
+To inhibit backups, you can avoid this option at command line.
 
 - `-e ealgo`
-Encryption algorithm to use. Currently supported algorithm is:
-`AES-XTS`. The default and recommended algorithm is `AES-XTS`.
+Encryption algorithm to use.
+Currently supported algorithm is: `AES-XTS`.
+The default and recommended algorithm is `AES-XTS`.
 
 - `-g`
-Enable booting from this encrypted root filesystem. Only applicable when
-booting the encrypted device using FreeBSD. The FreeBSD boot loader
-prompts for the passphrase and loads loader(8) from the encrypted
-partition.
+Enable booting from this encrypted root filesystem.
+Only applicable when booting the encrypted device using FreeBSD.
+The FreeBSD boot loader prompts for the passphrase and loads loader(8) from the encrypted partition.
 
 - `-i iterations`
-Number of iterations to use with PKCS#5v2 when processing User Key
-passphrase component. This option is mandatory.
+Number of iterations to use with PKCS#5v2 when processing User Key passphrase component.
+This option is mandatory.
 
 - `-J newpassfile`
-Specifies a file which contains the passphrase component of the User Key
-(or part of it).  If newpassfile is given as -, standard input will
-be used. Only the first line (excluding new-line character) is taken
-from the given file. otherwise the environment variable of `passphrase`
-will be used.
+Specifies a file which contains the passphrase component of the User Key (or part of it).
+If newpassfile is given as -, standard input will be used.
+Only the first line (excluding new-line character) is taken from the given file, otherwise the environment variable of `passphrase` will be used.
 
 - `-l keylen`
-Data Key length to use with the given crypto graphic algorithm. If the
-length is not specified, the selected algorithm uses its default key
-length. `AES-XTS` uses 128 and 256 bit keys. The first keylength is
-the default.
+Data Key length to use with the given crypto graphic algorithm.
+If the length is not specified, the selected algorithm uses its default key length.
+`AES-XTS` uses 128 and 256 bit keys.
+The first keylength is the default.
 
 - `-v`
 Enables the verbose mode.
 
 ### attach
-Attach the given providers. The encrypted Master Keys are loaded from
-the metadata and decrypted using the given passphrase and new virtual
-block device are created using the specified provider names.
+Attach the given providers.
+The encrypted Master Keys are loaded from the metadata and decrypted using the given passphrase and new virtual block device are created using the specified provider names.
 
 Additional options include:
 
 geli attach [-vd] [-j passfile] prov nbd
 
 - `-d`
-If	specified, `geli` daemon will be detached automatically on
-success and continue running on background.
+If specified, `geli` daemon will be detached automatically on success and continue running on background.
 
 - `-j passfile`
-Specifies a file which contains the passphrase component of the User Key
-(or part       of it). Formore information see the description of the
+Specifies a file which contains the passphrase component of the User Key (or part of it). Formore information see the description of the
 `-J` option for  the [init](#init) subcommand.
 
 - `-v`
 Enables the verbose mode.
 
 ### setkey
-Install a copy of the Master Key into the selected slot, encrypted
-with a new User Key.  If the selected slot is populated, replace the
-existing copy.	A provider has one Master Key, which can be stored
-in one or both slots, each encrypted with an	independent User Key.
+Install a copy of the Master Key into the selected slot, encrypted with a new User Key.
+If the selected slot is populated, replace the existing copy.
+A provider has one Master Key, which can be stored in one or both slots, each encrypted with an independent User Key.
 With the [init](#init) subcommand, only key number 0 is  initialized.
-The User Key can be changed at any time: for an attached provider,
-for    a detached provider, or on the backup file.
+The User Key can be changed at any time: for an attached provider, for a detached provider, or on the backup file.
 
 Additional options include:
 
 - `-i iterations`
-Number of iterations to use with PKCS#5v2.  If 0 is given, PKCS#5v2 will
-not be used.
+Number of iterations to use with PKCS#5v2.
+If 0 is given, PKCS#5v2 will not be used.
 
 - `-j passfile`
-Specifies a file which contains the passphrase component of a current
-User Key.
+Specifies a file which contains the passphrase component of a current User Key.
 
 - `-J newpassfile`
-Specifies a file which contains	the passphrase component of the
-new User Key.
+Specifies a file which contains the passphrase component of the new User Key.
 
 - `-n keyno`
-Specifies the index number of the Master Key copy to change (could be
-0 or 1).
-
+Specifies the index number of the Master Key copy to change (could be 0 or 1).
 
 - `-v`
 Enables the verbose mode.
-
 
 ### backup
 Backup metadata from the given provider to the given file.
@@ -166,7 +147,7 @@ Additional options include:
 Enables the verbose mode.
 
 ### restore
-Restore metadata from the given	file to	the given provider.
+Restore metadata from the given file to the given provider.
 
 Additional options include:
 
@@ -174,25 +155,22 @@ Additional options include:
 Enables the verbose mode.
 
 ### resize
-Inform geli that the provider has been resized. The old metadata block
-is relocated to the correct position	 at the end of the provider and
-the provider size is updated.
+Inform geli that the provider has been resized.
+The old metadata block is relocated to the correct position at the end of the provider and the provider size is updated.
 
 Additional options include:
 
 - `-s oldsize`
-The	size of	the provider before it was resized.
+The size of the provider before it was resized.
 
 - `-v`
 Enables the verbose mode.
 
 ### version
-If no arguments are given, the **version** subcommand will print the
-version of **geli** userland utility.
+If no arguments are given, the **version** subcommand will print the version of **geli** userland utility.
 
 - `-v`
 Enables the verbose mode.
-
 
 ### dump
 Dump metadata stored on the given providers.
@@ -205,9 +183,7 @@ Print the short usage help.
 
 ## Examples
 
-Initialize the disk using default AES-XTS(128) with custom PKCSv2
-iterations:
-
+Initialize the disk using default AES-XTS(128) with custom PKCSv2 iterations:
 
 ```sh
 $ truncate -s 100m disk.raw
@@ -236,17 +212,15 @@ Master Key: 07027a69be6aedaa7fbe6110cede8a5590c6ad66d550d8c939a5ba5a4fb6f9e077e6
   MD5 hash: 8d678a6d0f0eba6d665302cfdd9af252
 ```
 
-Attaching to the encrypted device. The virtual NBD block device will
-presents the unencrypted block device.
+Attaching to the encrypted device.
+The virtual NBD block device will presents the unencrypted block device.
 
 ```
 $ ./geli attach -d /dev/loop1 /dev/nbd1
 Enter Password:
 ```
 
-The decrypted virtual NBD block  device has exactly one sector less
-capacity:
-
+The decrypted virtual NBD block  device has exactly one sector less capacity:
 
 ```
 $ fdisk -l /dev/loop1
@@ -261,8 +235,7 @@ Sector size (logical/physical): 512 bytes / 512 bytes
 I/O size (minimum/optimal): 512 bytes / 512 bytes
 ```
 
-Writing to the decrypted BND block device will results to writing
-the encrypted device into encrypted block device.
+Writing to the decrypted BND block device will results to writing the encrypted device into encrypted block device.
 
 ```
 $ sudo dd if=/dev/random bs=512 of=/dev/nbd1
